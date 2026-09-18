@@ -1,0 +1,369 @@
+{
+  "name": "Recruiting - Job Context RAG Worker",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "jsonExample",
+        "jsonExample": "{\n  \"job_id\": \"JOB-001\"\n}"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -64,
+        -176
+      ],
+      "id": "fa38b061-b89e-4538-a722-1ad0c2f0f454",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Retrieve the authorized context for job_id: {{ $json.job_id }}.\n\nReturn only information supported by the private indexed knowledge base: position summary, must-have requirements, nice-to-have requirements, scoring rubric, rubric version, and source metadata. If coverage is insufficient, return the documented fallback instead of guessing.",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You are the Job Context RAG Agent for a recruiting workflow. Your only authorized source is the Query Recruiting Knowledge Base tool. Always query it before answering. Never invent job requirements, rubric weights, or policy. If the requested job is not covered, respond with: I don't know. I could not find enough information in the indexed documentation."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        -672,
+        -80
+      ],
+      "id": "821c1854-e418-4326-9a5b-34303e51517e",
+      "name": "Job Context RAG Agent"
+    },
+    {
+      "parameters": {
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -544,
+        144
+      ],
+      "id": "9f20aa0b-6684-4b23-8c07-50bc6f28eeb5",
+      "name": "Gemini - Job Context RAG"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ `Retrieve the complete authorized job context for ${$json.job_id}, including the position summary, must-have and nice-to-have requirements, rubric dimensions and weights, rubric version, and source metadata. Do not infer missing information.` }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainRetrievalQa",
+      "typeVersion": 1.7,
+      "position": [
+        208,
+        -160
+      ],
+      "id": "932a9d21-d752-4542-8305-a5e6a9943812",
+      "name": "Query Recruiting Knowledge Base"
+    },
+    {
+      "parameters": {
+        "topK": 8
+      },
+      "type": "@n8n/n8n-nodes-langchain.retrieverVectorStore",
+      "typeVersion": 1,
+      "position": [
+        272,
+        48
+      ],
+      "id": "f8939069-5bbf-456e-84bf-55ec549405f9",
+      "name": "Recruiting Knowledge Retriever"
+    },
+    {
+      "parameters": {
+        "memoryKey": {
+          "__rl": true,
+          "mode": "list",
+          "value": "vector_store_key"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreInMemory",
+      "typeVersion": 1.3,
+      "position": [
+        304,
+        192
+      ],
+      "id": "0b837b41-cff2-40db-beb9-e601366d06d3",
+      "name": "Recruiting Vector Store"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-embedding-2"
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        480,
+        352
+      ],
+      "id": "e0484e83-75ed-457a-9e4d-444487886339",
+      "name": "Embeddings Google Gemini"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxOutputTokens": 4096,
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        16,
+        112
+      ],
+      "id": "2256690c-06d7-4425-9973-6988ed17943b",
+      "name": "Gemini - Knowledge Base QA"
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "memoryKey": {
+          "__rl": true,
+          "mode": "list",
+          "value": "vector_store_key"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreInMemory",
+      "typeVersion": 1.3,
+      "position": [
+        912,
+        -448
+      ],
+      "id": "28226e82-a3a0-43ae-99d1-090842da6fac",
+      "name": "Index Recruiting Knowledge Base"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-embedding-2"
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        800,
+        -192
+      ],
+      "id": "7dcab063-b1b1-4996-b186-bc6d5402a382",
+      "name": "Google Gemini Embeddings - Indexing"
+    },
+    {
+      "parameters": {
+        "fileSelector": "/data/private-recruiting-knowledge-base.pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        624,
+        -416
+      ],
+      "id": "60f6f392-d4cc-4afc-8e75-057690f90dea",
+      "name": "Read Private Knowledge Base PDF"
+    },
+    {
+      "parameters": {
+        "dataType": "binary",
+        "loader": "pdfLoader",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "document_id",
+                "value": "PRIVATE-KB-001"
+              },
+              {
+                "name": "document_title",
+                "value": "Private Recruiting Knowledge Base"
+              },
+              {
+                "name": "version",
+                "value": "1.0"
+              },
+              {
+                "name": "job_id",
+                "value": "JOB-001"
+              },
+              {
+                "name": "source_file",
+                "value": "private-recruiting-knowledge-base.pdf"
+              }
+            ]
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        1072,
+        -176
+      ],
+      "id": "a8041c18-9767-4541-94fd-aeacdb8f79aa",
+      "name": "Recruiting PDF Loader"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rag = $('Query Recruiting Knowledge Base').first().json;\nconst input = $('When Executed by Another Workflow').first().json;\nconst answer = String(rag.response || '').trim();\nconst jobId = String(input.job_id || '').trim();\nconst fallback = \"I don't know. I could not find enough information in the indexed documentation.\";\n\nfunction normalize(value) {\n  return String(value || '')\n    .normalize('NFD')\n    .replace(/[̀-ͯ]/g, '')\n    .toLowerCase()\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nconst normalizedAnswer = normalize(answer);\nconst normalizedJobId = normalize(jobId);\nconst noCoverage =\n  normalizedAnswer.includes('i could not find enough information') ||\n  normalizedAnswer.includes('i cannot retrieve the requested information') ||\n  normalizedAnswer.includes('no indexed documentation was provided');\nconst mentionsRequestedJob = normalizedJobId.length > 0 && normalizedAnswer.includes(normalizedJobId);\nconst coverage = answer.length > 0 && !noCoverage && mentionsRequestedJob;\n\nreturn [{\n  json: {\n    job_id: jobId,\n    rag_executed: true,\n    rag_coverage: coverage,\n    rag_metadata: null,\n    rubric: coverage ? answer : '',\n    rag_context: coverage ? answer : '',\n    fallback: coverage ? '' : fallback,\n    rag_query: `Complete authorized context for job ${jobId}`,\n    retrieved_at: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        -112
+      ],
+      "id": "bac6d97e-bcec-410f-9132-74030ad07faa",
+      "name": "Prepare RAG Output"
+    },
+    {
+      "parameters": {
+        "jsCode": "const outputData = $('Prepare RAG Output').first().json;\nconst requestedJobId = String(outputData.job_id || '').trim();\nconst fallback = \"I don't know. I could not find enough information in the indexed documentation.\";\nlet chunks = [];\n\ntry {\n  chunks = $('Recruiting Vector Store').all();\n} catch (error) {\n  chunks = [];\n}\n\nconst sources = [];\n\nfunction collectMetadata(value) {\n  if (!value || typeof value !== 'object') return;\n  if (value.document_id && value.document_title && value.version && value.job_id && value.source_file) {\n    sources.push({\n      document_id: String(value.document_id),\n      document_title: String(value.document_title),\n      version: String(value.version),\n      job_id: String(value.job_id),\n      source_file: String(value.source_file)\n    });\n  }\n  for (const child of Object.values(value)) {\n    if (child && typeof child === 'object') collectMetadata(child);\n  }\n}\n\nfor (const item of chunks) collectMetadata(item.json);\n\nconst uniqueSources = Array.from(new Map(\n  sources.map(source => [[source.document_id, source.version, source.job_id, source.source_file].join('|'), source])\n).values());\nconst validSources = uniqueSources.filter(source => source.job_id === requestedJobId);\nconst validCoverage = outputData.rag_executed === true && outputData.rag_coverage === true && validSources.length > 0;\n\nreturn [{\n  json: {\n    ...outputData,\n    rag_coverage: validCoverage,\n    rubric: validCoverage ? outputData.rubric : '',\n    rag_context: validCoverage ? outputData.rag_context : '',\n    sources: validCoverage ? validSources : [],\n    fallback: validCoverage ? '' : fallback,\n    metadata_validated: validCoverage\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -576,
+        -368
+      ],
+      "id": "dffe57aa-ad4d-4e7a-b7ef-5f18d304c4f6",
+      "name": "Validate RAG Metadata"
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Query Recruiting Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Job Context RAG": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Job Context RAG Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Context RAG Agent": {
+      "main": [
+        []
+      ]
+    },
+    "Recruiting Knowledge Retriever": {
+      "ai_retriever": [
+        [
+          {
+            "node": "Query Recruiting Knowledge Base",
+            "type": "ai_retriever",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recruiting Vector Store": {
+      "ai_vectorStore": [
+        [
+          {
+            "node": "Recruiting Knowledge Retriever",
+            "type": "ai_vectorStore",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Recruiting Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Knowledge Base QA": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Query Recruiting Knowledge Base",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Embeddings - Indexing": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Index Recruiting Knowledge Base",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recruiting PDF Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Index Recruiting Knowledge Base",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Private Knowledge Base PDF": {
+      "main": [
+        [
+          {
+            "node": "Index Recruiting Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Recruiting Knowledge Base": {
+      "main": [
+        [
+          {
+            "node": "Prepare RAG Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare RAG Output": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}
