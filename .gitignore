@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+*.pdf
+*.docx
+*.xlsx
+*.csv
+candidate-data/
+private-data/
+knowledge-base/
+exports/private/
+.DS_Store
+Thumbs.db
+
