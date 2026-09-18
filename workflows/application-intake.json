@@ -1,0 +1,120 @@
+{
+  "name": "Recruiting - Application Intake",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "candidate-application-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "16e4fd8e-0385-4fdb-8bf1-e6416d52847b",
+      "name": "Application Received",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -3728,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const incoming = $input.first().json;\nconst body = incoming.body ?? incoming;\nconst now = new Date();\nconst randomSuffix = Math.random().toString(36).slice(2, 8).toUpperCase();\n\nconst candidateId = String(body.candidate_id || body.linkedin_application_id || `CAND-${randomSuffix}`);\nconst jobId = String(body.job_id || 'JOB-001');\nconst promptVersion = String(body.prompt_version || 'screening-v1.0');\n\nreturn [{\n  json: {\n    ...body,\n    source: body.source || 'linkedin_jobs',\n    candidate_id: candidateId,\n    job_id: jobId,\n    resume_text: String(body.resume_text || ''),\n    screening_answers: Array.isArray(body.screening_answers) ? body.screening_answers : [],\n    recruiter_notes: String(body.recruiter_notes || ''),\n    conversation_notes: String(body.conversation_notes || ''),\n    prompt_version: promptVersion,\n    trace_id: `TRC-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${randomSuffix}`,\n    idempotency_key: `APP-${candidateId}-${jobId}-${promptVersion}`,\n    received_at: now.toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3504,
+        720
+      ],
+      "id": "96908fbf-f6da-47be-a993-f9b458453bb7",
+      "name": "Build Identity and Idempotency"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: \"accepted\", trace_id: $json.trace_id, message: \"Application received. Processing will continue asynchronously.\" } }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -3248,
+        720
+      ],
+      "id": "27d70a0d-bd90-4871-b43b-170a5607d672",
+      "name": "Immediate ACK - 202"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_WORKFLOW_ID",
+          "mode": "list",
+          "cachedResultName": "Recruiting - Candidate Screening Orchestrator"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -3248,
+        896
+      ],
+      "id": "a4199d20-2596-4484-a3a9-ab057d7be7ec",
+      "name": "Dispatch to Screening Orchestrator"
+    }
+  ],
+  "connections": {
+    "Application Received": {
+      "main": [
+        [
+          {
+            "node": "Build Identity and Idempotency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Identity and Idempotency": {
+      "main": [
+        [
+          {
+            "node": "Immediate ACK - 202",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Dispatch to Screening Orchestrator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Immediate ACK - 202": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  }
+}
