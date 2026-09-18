@@ -1,0 +1,3052 @@
+{
+  "name": "Recruiting - Candidate Screening Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const incoming = $input.first().json;\nconst body = incoming.body ?? incoming;\nconst now = new Date();\nconst randomSuffix = Math.random().toString(36).slice(2, 8).toUpperCase();\n\nconst screeningAnswers = Array.isArray(body.screening_answers)\n  ? body.screening_answers\n  : [];\n\nconst candidateMaterial = [\n  body.resume_text ? `RESUME\n${String(body.resume_text)}` : '',\n  screeningAnswers.length ? `SCREENING ANSWERS\n${JSON.stringify(screeningAnswers)}` : '',\n  body.recruiter_notes ? `RECRUITER NOTES\n${String(body.recruiter_notes)}` : '',\n  body.conversation_notes ? `CONVERSATION NOTES\n${String(body.conversation_notes)}` : ''\n].filter(Boolean).join('\\n\\n');\n\nreturn [{\n  json: {\n    trace_id: incoming.trace_id || `TRC-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${randomSuffix}`,\n    idempotency_key: incoming.idempotency_key,\n    execution_id: String($execution.id),\n    timestamp: now.toISOString(),\n    date: now.toISOString().slice(0, 10),\n    started_at_ms: now.getTime(),\n    environment: body.environment || 'staging',\n    deployment_phase: Number(body.deployment_phase ?? 2),\n    prompt_version: body.prompt_version || 'screening-v1.0',\n    rubric_version: body.rubric_version || 'scorecard-v1.0',\n    source: body.source || 'linkedin_jobs',\n    linkedin_application_id: body.linkedin_application_id || '',\n    candidate_id: body.candidate_id || `CAND-${randomSuffix}`,\n    candidate_name: body.candidate_name || 'Unnamed candidate',\n    email: body.email || '',\n    phone: body.phone || '',\n    job_id: body.job_id || 'JOB-001',\n    candidate_material: candidateMaterial,\n    daily_budget_usd: Number(body.daily_budget_usd ?? 2),\n    input_price_per_million: Number(body.input_price_per_million ?? 0.30),\n    output_price_per_million: Number(body.output_price_per_million ?? 2.50),\n    green_threshold: Number(body.green_threshold ?? 75),\n    red_threshold: Number(body.red_threshold ?? 50),\n    confidence_threshold: Number(body.confidence_threshold ?? 0.70),\n    review_team_chat_id: body.review_team_chat_id || $env.REVIEW_TEAM_CHAT_ID || ''\n  }\n}];"
+      },
+      "id": "1444fe8c-9724-48f6-b420-e1db94a7f5c6",
+      "name": "Governance - Open Trace",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3008,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Governance - Open Trace').first().json;\nconst original = String(input.candidate_material || '');\nconst counts = {};\nlet sanitized = original;\n\nconst rules = [\n  ['EMAIL', /[\\w.+-]+@[\\w-]+\\.[\\w.-]+/g],\n  ['PHONE', /(?:\\+?\\d[\\d\\s().-]{7,}\\d)/g],\n  ['LINKEDIN_URL', /https?:\\/\\/(?:www\\.)?linkedin\\.com\\/[^\\s]+/gi]\n];\n\nfor (const [type, pattern] of rules) {\n  const matches = sanitized.match(pattern) || [];\n  counts[type] = matches.length;\n  sanitized = sanitized.replace(pattern, `[${type}_REDACTED]`);\n}\n\nif (input.candidate_name && input.candidate_name !== 'Unnamed candidate') {\n  sanitized = sanitized.split(String(input.candidate_name)).join('[NAME_REDACTED]');\n  counts.NAME = 1;\n}\n\nreturn [{\n  json: {\n    ...input,\n    alias: `Candidate ${String(input.candidate_id || '').slice(-6)}`,\n    sanitized_candidate_material: sanitized,\n    pii_masked: Object.values(counts).some(value => value > 0),\n    pii_redaction_counts: counts,\n    candidate_material: undefined,\n    email: undefined,\n    phone: undefined\n  }\n}];"
+      },
+      "id": "2e57f8d6-c93a-48a6-9638-fbacf57fb885",
+      "name": "Data Minimization - Mask PII",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1968,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst text = String(input.sanitized_candidate_material || '');\n\nconst patterns = [\n  ['ignore_instructions', /(ignore|disregard|forget)\\s+(all\\s+)?(previous\\s+|above\\s+)?(instructions?|rules?|prompts?)/i],\n  ['role_change', /(you are now|act as if you were|new role)/i],\n  ['score_request', /(assign|give|set)\\s+.{0,25}(score|100|maximum)/i],\n  ['verdict_request', /(recommend|mark|return)\\s+.{0,25}(eligible|hire|approved)/i],\n  ['prompt_exfiltration', /(system\\s*prompt|reveal\\s+your\\s+instructions|show\\s+your\\s+prompt)/i]\n];\n\nconst detected = patterns.filter(([, pattern]) => pattern.test(text)).map(([name]) => name);\n\nreturn [{\n  json: {\n    ...input,\n    injection_detected: detected.length > 0,\n    detected_patterns: detected.join(', ') || 'none'\n  }\n}];"
+      },
+      "id": "f69015ca-5081-4b4b-ad83-ac4e1d920ad0",
+      "name": "Prompt Injection Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1760,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cs1",
+              "leftValue": "={{ $json.injection_detected }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b28c7713-7f06-4580-9f30-fa59f4c7b0e7",
+      "name": "Is Input Safe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1696,
+        848
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { ...$input.item.json, decision_band: \"BLOCKED\", match_score: 0, action: \"Blocked before model invocation because candidate content contained instruction-like patterns. Manual review is required.\" } }}",
+        "options": {}
+      },
+      "id": "e0f5d103-f7da-4c57-a415-38499b70ed4f",
+      "name": "Blocked by Security",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -928,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_DATA_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Configure this Data Table"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "date",
+              "keyValue": "={{ $json.date }}"
+            },
+            {
+              "keyName": "environment",
+              "keyValue": "={{ $json.environment }}"
+            }
+          ]
+        },
+        "returnAll": true
+      },
+      "id": "18bbf5be-7bd2-4f2d-84ec-c715157af484",
+      "name": "Daily Spend",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -1472,
+        640
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Prompt Injection Guard').first().json;\nconst rows = $input.all().map(item => item.json).filter(row => row && row.cost_usd != null);\nconst spendToday = Number(rows.reduce((sum, row) => sum + Number(row.cost_usd || 0), 0).toFixed(6));\nconst budget = Number(config.daily_budget_usd || 2);\nconst consumedRatio = budget > 0 ? spendToday / budget : 0;\n\nreturn [{\n  json: {\n    ...config,\n    spend_today: spendToday,\n    executions_today: rows.length,\n    budget_percentage: Math.round(consumedRatio * 1000) / 10,\n    budget_available: spendToday < budget,\n    burn_rate_alert: consumedRatio >= 0.8\n  }\n}];"
+      },
+      "id": "98c08884-053b-4855-b81f-6ad7fd44def4",
+      "name": "Daily Burn Rate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1312,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cp1",
+              "leftValue": "={{ $json.budget_available }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "27604b3b-f1b3-461b-893f-dbd4903e5b58",
+      "name": "Is Budget Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1152,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { ...$input.item.json, decision_band: \"DEFERRED\", match_score: 0, action: \"Deferred because the daily model budget was reached. The application remains queued for controlled review.\" } }}",
+        "options": {}
+      },
+      "id": "4dba1154-d92f-44b7-9c9e-d17c710ef168",
+      "name": "Paused by Budget Guardrail",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -752,
+        816
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ {\n  \"job_id\": $json.job_id,\n  \"rag_executed\": $json.rag_executed,\n  \"rag_coverage\": $json.rag_coverage,\n  \"rag_metadata\": $json.rag_metadata,\n  \"rubric\": $json.rubric,\n  \"rag_context\": $json.rag_context,\n  \"fallback\": $json.fallback,\n  \"rag_query\": $json.rag_query,\n  \"recuperado_en\": $json.recuperado_en\n} }}",
+        "options": {}
+      },
+      "id": "fbd61783-e0c5-4ea2-b024-3c0c89a26a7f",
+      "name": "Job Context and Rubric",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -544,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_WORKFLOW_ID",
+          "mode": "list",
+          "cachedResultName": "Recruiting - Eligibility Screening Worker"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "trace_id": "=trace_id\n{{ $('Governance - Open Trace').first().json.trace_id }}",
+            "candidate_id": "=candidate_id\n{{ $('Governance - Open Trace').first().json.candidate_id }}",
+            "alias": "=alias\n{{ $('Data Minimization - Mask PII').first().json.alias }}",
+            "job_id": "={{ $json.job_id }}",
+            "position": "={{ $json.rag_context }}",
+            "sanitized_candidate_material": "={{ $('Data Minimization - Mask PII').first().json.sanitized_candidate_material }}",
+            "must_have": "={{ $json.rag_context }}",
+            "nice_to_have": "={{ '' }}",
+            "hiring_manager_notes": "={{ $json.rag_context }}",
+            "environment": "={{ $('Governance - Open Trace').first().json.environment }}",
+            "prompt_version": "={{ $('Governance - Open Trace').first().json.prompt_version }}",
+            "sent_at_ms": "={{ $now.toMillis() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "trace_id",
+              "displayName": "trace_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "candidate_id",
+              "displayName": "candidate_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alias",
+              "displayName": "alias",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_id",
+              "displayName": "job_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "position",
+              "displayName": "position",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sanitized_candidate_material",
+              "displayName": "sanitized_candidate_material",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "must_have",
+              "displayName": "must_have",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nice_to_have",
+              "displayName": "nice_to_have",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hiring_manager_notes",
+              "displayName": "hiring_manager_notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "environment",
+              "displayName": "environment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "prompt_version",
+              "displayName": "prompt_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sent_at_ms",
+              "displayName": "sent_at_ms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "40b077c7-977f-4a79-956c-957b0b2b0700",
+      "name": "Worker - Eligibility Screening",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -352,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ce1",
+              "leftValue": "={{ $json.eligible }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "882102a5-fd72-4f0e-b2aa-ddd5e0f2db09",
+      "name": "Is Candidate Eligible?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2320,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_WORKFLOW_ID",
+          "mode": "list",
+          "cachedResultName": "Recruiting - Match Scorecard Worker"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "trace_id": "={{ $('Governance - Open Trace').first().json.trace_id }}",
+            "candidate_id": "={{ $('Governance - Open Trace').first().json.candidate_id }}",
+            "alias": "={{ $('Data Minimization - Mask PII').first().json.alias }}",
+            "job_id": "={{ $('Job Context and Rubric').first().json.job_id }}",
+            "position": "={{ $('Job Context and Rubric').first().json.rag_context }}",
+            "sanitized_candidate_material": "={{ $('Data Minimization - Mask PII').first().json.sanitized_candidate_material }}",
+            "must_have": "={{ $('Job Context and Rubric').first().json.rag_context }}",
+            "nice_to_have": "={{ '' }}",
+            "hiring_manager_notes": "={{ $('Job Context and Rubric').first().json.rag_context }}",
+            "detected_tags": "={{ $json.detected_tags }}",
+            "relevant_experience_years": "={{ $json.relevant_experience_years }}",
+            "environment": "={{ $('Governance - Open Trace').first().json.environment }}",
+            "rubric_version": "={{ $('Job Context and Rubric').item.json.rubric_version }}",
+            "sent_at_ms": "={{ $now.toMillis() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "trace_id",
+              "displayName": "trace_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "candidate_id",
+              "displayName": "candidate_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "alias",
+              "displayName": "alias",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_id",
+              "displayName": "job_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "position",
+              "displayName": "position",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sanitized_candidate_material",
+              "displayName": "sanitized_candidate_material",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "must_have",
+              "displayName": "must_have",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nice_to_have",
+              "displayName": "nice_to_have",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hiring_manager_notes",
+              "displayName": "hiring_manager_notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "detected_tags",
+              "displayName": "detected_tags",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "relevant_experience_years",
+              "displayName": "relevant_experience_years",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "environment",
+              "displayName": "environment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "rubric_version",
+              "displayName": "rubric_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sent_at_ms",
+              "displayName": "sent_at_ms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "acbe49a7-8ae6-4f63-a3d2-60424727b4b3",
+      "name": "Worker - Match Scorecard",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -320,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "sv1",
+                    "leftValue": "={{ $json.match_score }}",
+                    "rightValue": "={{ $('Governance - Open Trace').first().json.green_threshold }}",
+                    "operator": {
+                      "type": "number",
+                      "operation": "gte"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "GREEN"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "e7067b31-28fa-40e5-9680-0c3e2a547d1c",
+                    "leftValue": "={{ $json.match_score }}",
+                    "rightValue": "={{ $('Governance - Open Trace').first().json.red_threshold }}",
+                    "operator": {
+                      "type": "number",
+                      "operation": "lt"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "RED"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "YELLOW"
+        }
+      },
+      "id": "efa6eb54-e832-4781-ad52-b4aa3abfe33b",
+      "name": "Decision Band",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        320,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { ...$input.item.json, \"decision_band\": \"GREEN\", \"action\": \"Avanza a entrevista tecnica con el hiring manager\" } }}",
+        "options": {}
+      },
+      "id": "dd527e6b-db3d-4c52-b633-5597d7b54dab",
+      "name": "Decision - Green",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        608,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { ...$input.item.json, decision_band: \"YELLOW\", action: \"Gray area: human review is required before contacting the candidate.\" } }}",
+        "options": {}
+      },
+      "id": "3cee9741-2576-4778-ada3-4b5ae709c899",
+      "name": "Decision - Yellow",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        608,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { ...$input.item.json, \"decision_band\": \"RED\", \"action\": \"No avanza en esta busqueda; queda en la base para futuras vacantes\" } }}",
+        "options": {}
+      },
+      "id": "2a68d9e2-b560-48cb-8e84-ea6a63e8c869",
+      "name": "Decision - Red",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        608,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { ...$input.item.json, decision_band: \"NOT_ELIGIBLE\", match_score: 0, action: \"One or more must-have requirements were not demonstrated; the expensive scoring step is skipped.\" } }}",
+        "options": {}
+      },
+      "id": "8ba104b2-3a97-4994-b865-41344e80e23f",
+      "name": "Decision - Not Eligible",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        528,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function readNode(name) {\n  try { return $(name).first().json; } catch (error) { return null; }\n}\n\nconst governance = readNode('Governance - Open Trace') || {};\nconst security = readNode('Prompt Injection Guard') || {};\nconst eligibility = readNode('Worker - Eligibility Screening');\nconst scorecard = readNode('Worker - Match Scorecard');\nconst current = $input.first().json;\nconst rag = readNode('Job Context and Rubric') || current;\nconst supervisorRaw = readNode('Run AI Evaluation Supervisor');\nconst supervisor = supervisorRaw?.output || null;\n\nconst inputTokens = Number(eligibility?.tokens_in || 0) + Number(scorecard?.tokens_in || 0);\nconst outputTokens = Number(eligibility?.tokens_out || 0) + Number(scorecard?.tokens_out || 0);\nconst inputPrice = Number(governance.input_price_per_million ?? 0.30);\nconst outputPrice = Number(governance.output_price_per_million ?? 2.50);\nconst costUsd = Number(((inputTokens / 1e6) * inputPrice + (outputTokens / 1e6) * outputPrice).toFixed(6));\nconst modelCalls = (eligibility ? 1 : 0) + (scorecard ? 1 : 0);\nconst decisionBand = current.decision_band || 'UNKNOWN';\nconst noRagCoverage = decisionBand === 'NO_RAG_COVERAGE';\nconst confidence = noRagCoverage ? null : Number(scorecard?.confidence ?? eligibility?.confidence ?? 0);\nconst phase = Number(governance.deployment_phase ?? 2);\nconst threshold = Number(governance.confidence_threshold ?? 0.70);\n\nlet autonomyLevel;\nif (decisionBand === 'QA_REVIEW') autonomyLevel = 'HUMAN_APPROVAL';\nelse if (['BLOCKED', 'DEFERRED', 'NO_RAG_COVERAGE'].includes(decisionBand)) autonomyLevel = 'CLOSED';\nelse if (phase === 0) autonomyLevel = 'SHADOW';\nelse if (phase >= 3 && confidence >= threshold && ['GREEN', 'NOT_ELIGIBLE'].includes(decisionBand)) autonomyLevel = 'AUTONOMOUS';\nelse autonomyLevel = 'HUMAN_APPROVAL';\n\nconst reasoningSummary = [\n  eligibility ? `ELIGIBILITY: ${eligibility.reasoning || ''}` : null,\n  scorecard ? `SCORECARD: ${scorecard.reasoning || ''}` : null\n].filter(Boolean).join(' || ') || 'No model inference was performed.';\n\nreturn [{\n  json: {\n    trace_id: governance.trace_id,\n    date: governance.date,\n    timestamp: new Date().toISOString(),\n    environment: governance.environment,\n    deployment_phase: phase,\n    autonomy_level: autonomyLevel,\n    candidate_id: governance.candidate_id,\n    job_id: governance.job_id,\n    agent: 'Candidate Screening Orchestrator',\n    prompt_version: governance.prompt_version,\n    rubric_version: governance.rubric_version,\n    eligible: eligibility?.eligible === true,\n    match_score: Number(scorecard?.match_score ?? current.match_score ?? 0),\n    decision_band: decisionBand,\n    confidence,\n    agent_thought: reasoningSummary.slice(0, 1800),\n    evidence: String(scorecard?.breakdown || eligibility?.must_have_details || 'No evidence recorded').slice(0, 1800),\n    tokens_in: inputTokens,\n    tokens_out: outputTokens,\n    cost_usd: costUsd,\n    cost_method: 'character_estimate_divided_by_4',\n    cost_scenario: modelCalls === 0 ? 'no_inference' : modelCalls === 1 ? 'single_model_call' : 'standard_loop',\n    latency_ms: Date.now() - Number(governance.started_at_ms || Date.now()),\n    pii_masked: security.pii_masked ?? false,\n    injection_detected: security.injection_detected === true,\n    decision_route: decisionBand,\n    action: current.action || 'No action recorded',\n    decided_by: 'agent',\n    supervisor_executed: supervisor !== null,\n    supervisor_approved: supervisor?.approved ?? null,\n    supervisor_factual_accuracy: supervisor ? Number(supervisor.factual_accuracy ?? 0) : null,\n    supervisor_evidence_sufficiency: supervisor ? Number(supervisor.evidence_sufficiency ?? 0) : null,\n    supervisor_rubric_consistency: supervisor ? Number(supervisor.rubric_consistency ?? 0) : null,\n    supervisor_hallucination_detected: supervisor?.hallucination_detected ?? null,\n    supervisor_critique: supervisor ? String(supervisor.critique || '').slice(0, 1800) : '',\n    rag_executed: rag?.rag_executed ?? false,\n    rag_coverage: rag?.rag_coverage ?? false,\n    rag_document_id: rag?.rag_metadata?.document_id ?? '',\n    rag_document_title: rag?.rag_metadata?.document_title ?? '',\n    rag_version: rag?.rag_metadata?.version ?? '',\n    rag_source_file: rag?.rag_metadata?.source_file ?? '',\n    rag_query: rag?.rag_query ?? '',\n    node_name: 'Instrumentation and Audit Record',\n    tool_output: JSON.stringify({ decision_band: decisionBand, eligible: eligibility?.eligible === true, match_score: Number(scorecard?.match_score ?? current.match_score ?? 0), confidence, action: current.action || 'No action recorded' }).slice(0, 1800),\n    system_prompt_snapshot: `prompt_version=${governance.prompt_version || 'unversioned'} | rubric_version=${governance.rubric_version || 'unversioned'}`\n  }\n}];"
+      },
+      "id": "6f5eb3df-9d20-40fc-ba9c-430ac3484054",
+      "name": "Instrumentation and Audit Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_DATA_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Configure this Data Table"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "eligible": false,
+            "injection_detected": false
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "trace_id",
+              "displayName": "trace_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "environment",
+              "displayName": "environment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "deployment_phase",
+              "displayName": "deployment_phase",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "autonomy_level",
+              "displayName": "autonomy_level",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "candidate_id",
+              "displayName": "candidate_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "job_id",
+              "displayName": "job_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "agent",
+              "displayName": "agent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "prompt_version",
+              "displayName": "prompt_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "rubric_version",
+              "displayName": "rubric_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "eligible",
+              "displayName": "eligible",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "match_score",
+              "displayName": "match_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "decision_band",
+              "displayName": "decision_band",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "agent_thought",
+              "displayName": "agent_thought",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "evidence",
+              "displayName": "evidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "tokens_in",
+              "displayName": "tokens_in",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "tokens_out",
+              "displayName": "tokens_out",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "cost_usd",
+              "displayName": "cost_usd",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "cost_method",
+              "displayName": "cost_method",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "cost_scenario",
+              "displayName": "cost_scenario",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "latency_ms",
+              "displayName": "latency_ms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "pii_masked",
+              "displayName": "pii_masked",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "injection_detected",
+              "displayName": "injection_detected",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "decision_route",
+              "displayName": "decision_route",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "action",
+              "displayName": "action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "decided_by",
+              "displayName": "decided_by",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "node_name",
+              "displayName": "node_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "tool_output",
+              "displayName": "tool_output",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "system_prompt_snapshot",
+              "displayName": "system_prompt_snapshot",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "supervisor_executed",
+              "displayName": "supervisor_executed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "supervisor_approved",
+              "displayName": "supervisor_approved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "supervisor_factual_accuracy",
+              "displayName": "supervisor_factual_accuracy",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "supervisor_evidence_sufficiency",
+              "displayName": "supervisor_evidence_sufficiency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "supervisor_rubric_consistency",
+              "displayName": "supervisor_rubric_consistency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "supervisor_hallucination_detected",
+              "displayName": "supervisor_hallucination_detected",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "supervisor_critique",
+              "displayName": "supervisor_critique",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "28552e41-7672-4bec-b74f-be20696fdd86",
+      "name": "Write Audit Log",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1120,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "na1",
+                    "leftValue": "={{ $json.autonomy_level }}",
+                    "rightValue": "AUTONOMOUS",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "AUTONOMOUS (phase 3)"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "na2",
+                    "leftValue": "={{ $json.autonomy_level }}",
+                    "rightValue": "SHADOW",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "SHADOW (phase 0)"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "na3",
+                    "leftValue": "={{ $json.autonomy_level }}",
+                    "rightValue": "CLOSED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "CLOSED (bloqueo)"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "HUMAN APPROVAL (phases 1-2)"
+        }
+      },
+      "id": "f84a8d31-2fa5-4342-83eb-05fdd693989a",
+      "name": "Autonomy Level",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1344,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { ...$input.item.json, \"action\": \"MODO SHADOW (phase 0): la propuesta quedo registrada en el log y NO se ejecuto ninguna action ni se envio ningun mensaje. Sirve para juntar datos reales y ajustar los prompts antes de darle permisos al sistema.\" } }}",
+        "options": {}
+      },
+      "id": "5b125104-8641-4ce6-9a33-270801a5ab72",
+      "name": "Shadow Mode - Recommendation Only",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1600,
+        352
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "8158c1cc-9ab6-4dda-864e-13239eaa9864",
+      "name": "Closed Without External Action",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1600,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ (() => {\n  const audit = $('Instrumentation and Audit Record').first().json;\n  return {\n    trace_id: audit.trace_id,\n    outcome_summary: audit.decision_band === 'BLOCKED'\n      ? 'The application was blocked before any model call.'\n      : audit.decision_band === 'DEFERRED'\n        ? 'The application was deferred by the budget guardrail.'\n        : `The application completed with decision band ${audit.decision_band}.`,\n    outcome_reason: audit.action,\n    next_step: audit.autonomy_level === 3\n      ? 'The approved automated action may proceed.'\n      : 'A recruiter must review and approve the recommendation.',\n    match_score: audit.match_score,\n    confidence: audit.confidence,\n    cost_usd: audit.cost_usd\n  };\n})() }}",
+        "options": {}
+      },
+      "id": "a70f7fe2-db1b-497d-82be-7ac393b99b72",
+      "name": "Executive Summary",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1856,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ (() => {\n  const approved = ($('Request Human Approval (Telegram)').first().json.data || {}).approved === true;\n  const audit = $('Instrumentation and Audit Record').first().json;\n  return {\n    ...audit,\n    timestamp: $now.toISO(),\n    autonomy_level: 'RESOLVED_BY_HUMAN',\n    decision_route: approved ? 'APPROVED_BY_HUMAN' : 'REJECTED_BY_HUMAN',\n    action: approved ? 'A human reviewer approved the proposed action.' : 'A human reviewer rejected or did not approve the proposed action.',\n    decided_by: 'human',\n    agent_thought: `Human resolution for trace ${audit.trace_id}.`,\n    tokens_in: 0,\n    tokens_out: 0,\n    cost_usd: 0,\n    cost_method: 'no_inference'\n  };\n})() }}",
+        "options": {}
+      },
+      "id": "87e15faa-c625-4377-b9a2-66f047ce4f03",
+      "name": "Human Resolution Record",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2256,
+        816
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_DATA_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Configure this Data Table"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "eligible": false,
+            "injection_detected": false
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "trace_id",
+              "displayName": "trace_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "environment",
+              "displayName": "environment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "deployment_phase",
+              "displayName": "deployment_phase",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "autonomy_level",
+              "displayName": "autonomy_level",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "candidate_id",
+              "displayName": "candidate_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "job_id",
+              "displayName": "job_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "agent",
+              "displayName": "agent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "prompt_version",
+              "displayName": "prompt_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "rubric_version",
+              "displayName": "rubric_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "eligible",
+              "displayName": "eligible",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "match_score",
+              "displayName": "match_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "decision_band",
+              "displayName": "decision_band",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "agent_thought",
+              "displayName": "agent_thought",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "evidence",
+              "displayName": "evidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "tokens_in",
+              "displayName": "tokens_in",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "tokens_out",
+              "displayName": "tokens_out",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "cost_usd",
+              "displayName": "cost_usd",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "cost_method",
+              "displayName": "cost_method",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "cost_scenario",
+              "displayName": "cost_scenario",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "latency_ms",
+              "displayName": "latency_ms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "pii_masked",
+              "displayName": "pii_masked",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "injection_detected",
+              "displayName": "injection_detected",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "decision_route",
+              "displayName": "decision_route",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "action",
+              "displayName": "action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "decided_by",
+              "displayName": "decided_by",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "e437270d-4374-4eb0-a60b-31b74c4389c6",
+      "name": "Write Human Resolution",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2464,
+        736
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Governance - Open Trace').item.json.review_team_chat_id }}",
+        "text": "={{ (() => {\n  const esc = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const audit = $json;\n  const governance = $('Governance - Open Trace').item.json;\n  const job = $('Job Context and Rubric').item.json;\n  return [\n    '<b>AUTOMATED RECRUITING DECISION</b>',\n    '',\n    '<b>Candidate:</b> ' + esc(governance.candidate_name) + ' (' + esc(audit.candidate_id) + ')',\n    '<b>Job:</b> ' + esc(job.job_id),\n    '<b>Match score:</b> ' + esc(audit.match_score) + '/100',\n    '<b>Decision band:</b> ' + esc(audit.decision_band),\n    '<b>Action:</b> ' + esc(audit.action),\n    '',\n    '<b>CITED EVIDENCE</b>',\n    esc(String(audit.evidence || '').slice(0, 700)),\n    '',\n    '<i>Trace ' + esc(audit.trace_id) + ' | Environment ' + esc(audit.environment) + ' | Estimated cost ' + esc(audit.cost_usd) + ' USD</i>'\n  ].join('\n');\n})() }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "4af46de0-6130-4b9d-9155-95b9987303da",
+      "name": "Notify Review Team (Telegram)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1600,
+        176
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Notification failure does not roll back the persisted audit record."
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "chatId": "={{ $('Governance - Open Trace').item.json.review_team_chat_id }}",
+        "message": "={{ (() => {\n  const esc = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const audit = $('Instrumentation and Audit Record').first().json;\n  const governance = $('Governance - Open Trace').item.json;\n  const job = $('Job Context and Rubric').item.json;\n  return [\n    'HUMAN REVIEW REQUIRED',\n    '',\n    'The workflow evaluated this application but will not take external action until a recruiter decides.',\n    '',\n    'Candidate: ' + esc(governance.candidate_name) + ' (' + esc(audit.candidate_id) + ')',\n    'Contact: ' + esc(governance.email),\n    'Job: ' + esc(job.job_id),\n    'Match score: ' + esc(audit.match_score) + '/100',\n    'Confidence: ' + esc(audit.confidence),\n    'Decision band: ' + esc(audit.decision_band),\n    'Proposed action: ' + esc(audit.action),\n    '',\n    'CITED EVIDENCE',\n    esc(String(audit.evidence || '').slice(0, 700)),\n    '',\n    'Trace: ' + esc(audit.trace_id),\n    'PII masked before model calls: ' + esc(audit.pii_masked),\n    'Estimated evaluation cost: ' + esc(audit.cost_usd) + ' USD'\n  ].join('\n');\n})() }}",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "approveLabel": "Approve",
+            "disapproveLabel": "Reject"
+          }
+        },
+        "options": {}
+      },
+      "id": "3fe405be-763b-4e5e-bd1b-534dc8b3e5db",
+      "name": "Request Human Approval (Telegram)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1584,
+        736
+      ],
+      "notes": "sendAndWait: manda el mensaje con dos botones y deja la ejecucion esperando hasta 24 h. Reemplaza al par mail + Wait."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ap1",
+              "leftValue": "={{ $json.data.approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "bb41878c-3f49-49f0-aa44-3016dabc1759",
+      "name": "Was It Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1808,
+        736
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Governance - Open Trace').item.json.review_team_chat_id }}",
+        "text": "={{ (() => {\n  const esc = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const audit = $('Instrumentation and Audit Record').first().json;\n  const governance = $('Governance - Open Trace').item.json;\n  return [\n    '<b>APPROVED BY HUMAN REVIEWER</b>',\n    '',\n    '<b>Candidate:</b> ' + esc(governance.candidate_name),\n    '<b>Contact:</b> ' + esc(governance.email),\n    '<b>Approved action:</b> ' + esc(audit.action),\n    '',\n    'This public workflow intentionally stops before changing an ATS record, scheduling an interview, or contacting a candidate.',\n    '',\n    '<i>Trace ' + esc(audit.trace_id) + '</i>'\n  ].join('\n');\n})() }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "f9e28cef-e26d-4bd2-8e8d-525c8ff505dd",
+      "name": "Confirm Approval (Telegram)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2048,
+        640
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "The human resolution is still persisted if this notification fails."
+    },
+    {
+      "parameters": {},
+      "id": "75d3887e-98dc-4fe3-a1a5-e29c712a6c86",
+      "name": "No External Action",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2032,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -3184,
+        496
+      ],
+      "id": "05292c8e-9e0b-46db-bb12-8b6bc5d1763f",
+      "name": "Application Received from Intake"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_DATA_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Configure this Data Table"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "idempotency_key",
+              "keyValue": "={{ $json.idempotency_key }}"
+            }
+          ]
+        },
+        "limit": 1
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -2816,
+        496
+      ],
+      "id": "8840c005-7ce8-4f84-a9c4-6b1e6581391e",
+      "name": "Find Idempotency Key",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4876f0d6-c706-421a-ac44-50f516abbc7c",
+              "leftValue": "={{ !!$json.idempotency_key && $json.status !== 'FAILED' }}",
+              "rightValue": "FAILED",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -2560,
+        496
+      ],
+      "id": "ca674c46-2bc1-4397-9966-788880c4fc99",
+      "name": "Is This a Duplicate?"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2192,
+        288
+      ],
+      "id": "d5b869be-f69a-46e7-9183-bf59d917d46e",
+      "name": "Duplicate - Do Not Reprocess"
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_DATA_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Configure this Data Table"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "idempotency_key": "={{ $json.idempotency_key }}",
+            "trace_id": "={{ $json.trace_id }}",
+            "status": "={{ $json.status }}",
+            "execution_id": "={{ $json.execution_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "idempotency_key",
+              "displayName": "idempotency_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "trace_id",
+              "displayName": "trace_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "execution_id",
+              "displayName": "execution_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -2160,
+        832
+      ],
+      "id": "50472525-0915-43a9-ac05-88abe3ecca73",
+      "name": "Register Application as Processing"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_DATA_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Configure this Data Table"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "idempotency_key",
+              "keyValue": "={{ $('Governance - Open Trace').first().json.idempotency_key }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "COMPLETED"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "idempotency_key",
+              "displayName": "idempotency_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "trace_id",
+              "displayName": "trace_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2064,
+        368
+      ],
+      "id": "d89e6df6-20b1-4671-a95d-8c5f354c6672",
+      "name": "Mark Idempotency Record Completed"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_DATA_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Configure this Data Table"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "idempotency_key",
+              "keyValue": "={{ $('Governance - Open Trace').first().json.idempotency_key }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "COMPLETED"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "idempotency_key",
+              "displayName": "idempotency_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "trace_id",
+              "displayName": "trace_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2464,
+        1024
+      ],
+      "id": "0d1afb5a-66ed-43c8-a12a-a3ffb687bb46",
+      "name": "Mark Idempotency Record Completed - HITL"
+    },
+    {
+      "parameters": {
+        "jsCode": "function readNode(name) {\n  try { return $(name).first().json; } catch (error) { return {}; }\n}\n\nconst governance = readNode('Governance - Open Trace');\nconst security = readNode('Data Minimization - Mask PII');\nconst eligibility = readNode('Worker - Eligibility Screening');\nconst scorecard = readNode('Worker - Match Scorecard');\nconst job = readNode('Job Context and Rubric');\n\nreturn [{\n  json: {\n    trace_id: governance.trace_id,\n    idempotency_key: governance.idempotency_key,\n    sanitized_candidate_material: security.sanitized_candidate_material || '',\n    eligibility_result: eligibility,\n    scorecard_result: scorecard,\n    rubric: job.rubric || job.scorecard || JSON.stringify(job),\n    rag_metadata: job.rag_metadata || {},\n    audited_at: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "id": "f49e333a-3266-4d7f-bfce-680efd3582bb",
+      "name": "Prepare Evaluation for QA"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_WORKFLOW_ID",
+          "mode": "list",
+          "cachedResultName": "Recruiting - AI Evaluation Supervisor"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        48,
+        512
+      ],
+      "id": "b8b621d3-b08f-49ff-a24d-2b069f40cbec",
+      "name": "Run AI Evaluation Supervisor"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4d53bf6a-dbc8-4647-bb64-441802eb8c79",
+              "leftValue": "={{ $json.output.approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -160,
+        96
+      ],
+      "id": "460bdf9c-4a84-4cb8-9758-e19c443bcdd6",
+      "name": "Did the Supervisor Approve?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const score = $('Worker - Match Scorecard').first().json;\nconst judge = $('Run AI Evaluation Supervisor').first().json.output;\n\nreturn [{\n  json: {\n    ...score,\n\n    supervisor_approved: judge.approved === true,\n    supervisor_factual_accuracy: Number(judge.factual_accuracy),\n    supervisor_evidence_sufficiency: Number(judge.evidence_sufficiency),\n    supervisor_rubric_consistency: Number(judge.rubric_consistency),\n    supervisor_hallucination_detected: judge.hallucination_detected === true,\n    supervisor_critique: judge.critique\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        144
+      ],
+      "id": "f57ba6fe-0447-436d-af56-ca478b4b4881",
+      "name": "Restore Validated Result"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ (() => {\n  const supervisor = $json.output;\n  let evaluation = {};\n  try { evaluation = $('Worker - Match Scorecard').first().json; }\n  catch (error) { evaluation = $('Worker - Eligibility Screening').first().json; }\n  return {\n    ...evaluation,\n    supervisor_approved: false,\n    supervisor_factual_accuracy: Number(supervisor.factual_accuracy),\n    supervisor_evidence_sufficiency: Number(supervisor.evidence_sufficiency),\n    supervisor_rubric_consistency: Number(supervisor.rubric_consistency),\n    supervisor_hallucination_detected: supervisor.hallucination_detected === true,\n    supervisor_critique: supervisor.critique,\n    decision_band: 'QA_REVIEW',\n    action: 'Autonomy was frozen by the AI Evaluation Supervisor. Human review is required before any external action.'\n  };\n})() }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        624,
+        688
+      ],
+      "id": "96eee739-fcee-4472-bb06-d4ed72630b62",
+      "name": "Supervisor Rejected - Freeze Autonomy"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "8219b850-06e1-49f2-a5ab-103d599ee12d",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "FAILED",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -2560,
+        784
+      ],
+      "id": "dc9d7d33-7547-4c15-bf45-0091c0dd54eb",
+      "name": "Is This a Failed-Application Retry?"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_DATA_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Configure this Data Table"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "idempotency_key",
+              "keyValue": "={{ $json.idempotency_key }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "execution_id": "={{ String($execution.id) }}",
+            "status": "PROCESSING"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "idempotency_key",
+              "displayName": "idempotency_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "trace_id",
+              "displayName": "trace_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "execution_id",
+              "displayName": "execution_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -2288,
+        560
+      ],
+      "id": "873db84e-fb93-4393-9428-e6afbf3c1178",
+      "name": "Reactivate Failed Application"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ {\n  \"idempotency_key\": $('Governance - Open Trace').first().json.idempotency_key,\n  \"trace_id\": $('Governance - Open Trace').first().json.trace_id,\n  \"execution_id\": String($execution.id),\n  \"status\": \"PROCESSING\"\n} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2352,
+        784
+      ],
+      "id": "4047dc32-c3a7-4d62-be41-a9d8b0d60225",
+      "name": "Prepare Idempotency Record"
+    },
+    {
+      "parameters": {
+        "jsCode": "function readNode(name) {\n  try { return $(name).first().json; } catch (error) { return {}; }\n}\n\nconst governance = readNode('Governance - Open Trace');\nconst security = readNode('Data Minimization - Mask PII');\nconst eligibility = readNode('Worker - Eligibility Screening');\nconst job = readNode('Job Context and Rubric');\n\nreturn [{\n  json: {\n    trace_id: governance.trace_id,\n    idempotency_key: governance.idempotency_key,\n    evaluation_type: 'ELIGIBILITY_NOT_ELIGIBLE',\n    sanitized_candidate_material: security.sanitized_candidate_material || '',\n    eligibility_result: eligibility,\n    scorecard_result: {},\n    rubric: job.rubric || job.scorecard || JSON.stringify(job),\n    rag_metadata: job.rag_metadata || {},\n    audited_at: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1648,
+        384
+      ],
+      "id": "81014931-f122-4e19-964e-429ae1416a4f",
+      "name": "Prepare Not-Eligible Evaluation for QA"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5e2317b3-d361-42f8-90fe-37118aac55fe",
+              "leftValue": "={{ $('Prepare Not-Eligible Evaluation for QA').isExecuted }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        32,
+        16
+      ],
+      "id": "7f2bbed9-eac9-468e-81b0-ad364b232160",
+      "name": "Is This an Eligibility Audit?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const eligibility = $('Worker - Eligibility Screening').first().json;\nconst supervisor = $('Run AI Evaluation Supervisor').first().json.output;\n\nreturn [{\n  json: {\n    ...eligibility,\n    decision_band: 'NOT_ELIGIBLE',\n    match_score: 0,\n    action: 'The candidate did not demonstrate one or more must-have requirements.',\n    supervisor_approved: supervisor.approved === true,\n    supervisor_factual_accuracy: Number(supervisor.factual_accuracy),\n    supervisor_evidence_sufficiency: Number(supervisor.evidence_sufficiency),\n    supervisor_rubric_consistency: Number(supervisor.rubric_consistency),\n    supervisor_hallucination_detected: supervisor.hallucination_detected === true,\n    supervisor_critique: supervisor.critique\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -80
+      ],
+      "id": "36966bc4-7c5d-4af4-baf3-3a56fa873e0c",
+      "name": "Restore Validated Not-Eligible Result"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_WORKFLOW_ID",
+          "mode": "list",
+          "cachedResultName": "Recruiting - Job Context RAG Worker"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "job_id": "={{ $('Governance - Open Trace').first().json.job_id }}"
+          },
+          "matchingColumns": [
+            "job_id"
+          ],
+          "schema": [
+            {
+              "id": "job_id",
+              "displayName": "job_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -960,
+        496
+      ],
+      "id": "997080d9-7d15-4986-b57c-32b5e9a5c009",
+      "name": "Call Job Context RAG Worker"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c82cc174-cf74-4804-9696-f72ff5fcd209",
+              "leftValue": "={{ $json.rag_coverage === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -800,
+        592
+      ],
+      "id": "8b8c2252-c737-4e0a-88bb-7ef648c2e333",
+      "name": "Does RAG Have Coverage?"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ {\n  trace_id: $('Governance - Open Trace').first().json.trace_id,\n  idempotency_key: $('Governance - Open Trace').first().json.idempotency_key,\n  candidate_id: $('Governance - Open Trace').first().json.candidate_id,\n  job_id: $json.job_id,\n  rag_executed: true,\n  rag_coverage: false,\n  rag_query: $json.rag_query,\n  rag_metadata: $json.rag_metadata,\n  decision_band: 'NO_RAG_COVERAGE',\n  autonomy_level: 'CLOSED',\n  action: 'Evaluation stopped because the private RAG knowledge base did not cover the requested job.',\n  fallback: $json.fallback,\n  reason: 'The requested job did not have sufficient verified documentation in the private knowledge base.',\n  decided_by: 'RAG_GATE'\n} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -560,
+        608
+      ],
+      "id": "ddd2ee3e-90c7-461d-b8b3-c8d8550b793d",
+      "name": "No RAG Coverage - Stop Evaluation"
+    },
+    {
+      "parameters": {
+        "content": "## Intake, Idempotency, and Resilience\nThe independent intake workflow returns an immediate HTTP 202 response, then dispatches asynchronous processing. A persistent idempotency record prevents duplicate evaluations and supports controlled retries after failures.",
+        "height": 304,
+        "width": 656
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -3280,
+        128
+      ],
+      "typeVersion": 1,
+      "id": "34484ca8-8cee-44e7-b358-2805977481f4",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Manager-Worker Orchestration and RAG\nThe orchestrator delegates eligibility, scorecard, RAG, and QA work to independent sub-workflows. The private knowledge base is not included in this repository and must be configured by each deployment.",
+        "height": 368,
+        "width": 864
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1136,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "c9cbc291-2513-43a8-9d61-28f241faad8d",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## AI Evaluation Supervisor and HITL\nEvery candidate evaluation is audited by an independent supervisor. Rejected evaluations freeze autonomy and route the case to human review. Human approval is required whenever governance thresholds are not met.",
+        "height": 304,
+        "width": 1024
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -240,
+        880
+      ],
+      "typeVersion": 1,
+      "id": "14a67ee5-10cc-4979-a040-6dcfeb3ad027",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## Auditability, Privacy, and Cost Controls\nEvery run receives a trace ID. The workflow masks PII before model calls, checks for prompt injection, enforces a daily budget, records model usage, and persists decision evidence for auditability.",
+        "height": 384,
+        "width": 624
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        816,
+        -32
+      ],
+      "typeVersion": 1,
+      "id": "f767ba26-76ca-44e1-bb65-5abb7c4afcd9",
+      "name": "Sticky Note3"
+    }
+  ],
+  "connections": {
+    "Governance - Open Trace": {
+      "main": [
+        [
+          {
+            "node": "Find Idempotency Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Minimization - Mask PII": {
+      "main": [
+        [
+          {
+            "node": "Prompt Injection Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prompt Injection Guard": {
+      "main": [
+        [
+          {
+            "node": "Is Input Safe?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Input Safe?": {
+      "main": [
+        [
+          {
+            "node": "Daily Spend",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Blocked by Security",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Spend": {
+      "main": [
+        [
+          {
+            "node": "Daily Burn Rate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Burn Rate": {
+      "main": [
+        [
+          {
+            "node": "Is Budget Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Budget Available?": {
+      "main": [
+        [
+          {
+            "node": "Call Job Context RAG Worker",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Paused by Budget Guardrail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Context and Rubric": {
+      "main": [
+        [
+          {
+            "node": "Worker - Eligibility Screening",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Worker - Eligibility Screening": {
+      "main": [
+        [
+          {
+            "node": "Is Candidate Eligible?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Candidate Eligible?": {
+      "main": [
+        [
+          {
+            "node": "Worker - Match Scorecard",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Not-Eligible Evaluation for QA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Worker - Match Scorecard": {
+      "main": [
+        [
+          {
+            "node": "Prepare Evaluation for QA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decision Band": {
+      "main": [
+        [
+          {
+            "node": "Decision - Green",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Decision - Red",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Decision - Yellow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decision - Green": {
+      "main": [
+        [
+          {
+            "node": "Instrumentation and Audit Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decision - Yellow": {
+      "main": [
+        [
+          {
+            "node": "Instrumentation and Audit Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decision - Red": {
+      "main": [
+        [
+          {
+            "node": "Instrumentation and Audit Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decision - Not Eligible": {
+      "main": [
+        [
+          {
+            "node": "Instrumentation and Audit Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Blocked by Security": {
+      "main": [
+        [
+          {
+            "node": "Instrumentation and Audit Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Paused by Budget Guardrail": {
+      "main": [
+        [
+          {
+            "node": "Instrumentation and Audit Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Instrumentation and Audit Record": {
+      "main": [
+        [
+          {
+            "node": "Write Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Audit Log": {
+      "main": [
+        [
+          {
+            "node": "Autonomy Level",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Autonomy Level": {
+      "main": [
+        [
+          {
+            "node": "Notify Review Team (Telegram)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Shadow Mode - Recommendation Only",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Closed Without External Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Request Human Approval (Telegram)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shadow Mode - Recommendation Only": {
+      "main": [
+        [
+          {
+            "node": "Executive Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Closed Without External Action": {
+      "main": [
+        [
+          {
+            "node": "Executive Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Executive Summary": {
+      "main": [
+        [
+          {
+            "node": "Mark Idempotency Record Completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Human Resolution Record": {
+      "main": [
+        [
+          {
+            "node": "Write Human Resolution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Review Team (Telegram)": {
+      "main": [
+        [
+          {
+            "node": "Executive Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Human Approval (Telegram)": {
+      "main": [
+        [
+          {
+            "node": "Was It Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Was It Approved?": {
+      "main": [
+        [
+          {
+            "node": "Confirm Approval (Telegram)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No External Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Approval (Telegram)": {
+      "main": [
+        [
+          {
+            "node": "Human Resolution Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No External Action": {
+      "main": [
+        [
+          {
+            "node": "Human Resolution Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Application Received from Intake": {
+      "main": [
+        [
+          {
+            "node": "Governance - Open Trace",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Idempotency Key": {
+      "main": [
+        [
+          {
+            "node": "Is This a Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is This a Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Duplicate - Do Not Reprocess",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is This a Failed-Application Retry?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate - Do Not Reprocess": {
+      "main": [
+        []
+      ]
+    },
+    "Register Application as Processing": {
+      "main": [
+        [
+          {
+            "node": "Data Minimization - Mask PII",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Human Resolution": {
+      "main": [
+        [
+          {
+            "node": "Mark Idempotency Record Completed - HITL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Evaluation for QA": {
+      "main": [
+        [
+          {
+            "node": "Run AI Evaluation Supervisor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run AI Evaluation Supervisor": {
+      "main": [
+        [
+          {
+            "node": "Did the Supervisor Approve?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Did the Supervisor Approve?": {
+      "main": [
+        [
+          {
+            "node": "Is This an Eligibility Audit?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supervisor Rejected - Freeze Autonomy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Validated Result": {
+      "main": [
+        [
+          {
+            "node": "Decision Band",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supervisor Rejected - Freeze Autonomy": {
+      "main": [
+        [
+          {
+            "node": "Instrumentation and Audit Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is This a Failed-Application Retry?": {
+      "main": [
+        [
+          {
+            "node": "Reactivate Failed Application",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Idempotency Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reactivate Failed Application": {
+      "main": [
+        [
+          {
+            "node": "Data Minimization - Mask PII",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Idempotency Record": {
+      "main": [
+        [
+          {
+            "node": "Register Application as Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Not-Eligible Evaluation for QA": {
+      "main": [
+        [
+          {
+            "node": "Run AI Evaluation Supervisor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is This an Eligibility Audit?": {
+      "main": [
+        [
+          {
+            "node": "Restore Validated Not-Eligible Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Restore Validated Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Validated Not-Eligible Result": {
+      "main": [
+        [
+          {
+            "node": "Decision - Not Eligible",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Job Context RAG Worker": {
+      "main": [
+        [
+          {
+            "node": "Does RAG Have Coverage?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Does RAG Have Coverage?": {
+      "main": [
+        [
+          {
+            "node": "Job Context and Rubric",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No RAG Coverage - Stop Evaluation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No RAG Coverage - Stop Evaluation": {
+      "main": [
+        [
+          {
+            "node": "Instrumentation and Audit Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}
