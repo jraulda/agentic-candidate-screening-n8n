@@ -103,7 +103,7 @@
     },
     {
       "parameters": {
-        "jsonSchemaExample": "{\n  \"eligible\": true,\n  \"relevant_experience_years\": 5,\n  \"detected_tags\": [\n    \"azure_logic_apps\",\n    \"azure_data_factory\",\n    \"rest_apis\"\n  ],\n  \"must_have\": [\n    {\n      \"requirement\": \"Hands-on Azure Logic Apps experience\",\n      \"meets_requirement\": true,\n      \"evidence\": \"Concise quote from candidate material\"\n    }\n  ],\n  \"reason\": \"All must-have requirements are explicitly supported by evidence.\",\n  \"reasoning\": \"Concise evidence-based explanation.\",\n  \"confidence\": 0.9,\n  \"suspicious_instruction_detected\": false\n}"
+        "jsonSchemaExample": "{\n  \"eligible\": true,\n  \"relevant_experience_years\": 5,\n  \"detected_tags\": [\n    \"integration_platform\",\n    \"data_orchestration\",\n    \"rest_apis\"\n  ],\n  \"must_have\": [\n    {\n      \"requirement\": \"Hands-on enterprise workflow orchestration experience\",\n      \"meets_requirement\": true,\n      \"evidence\": \"Concise quote from candidate material\"\n    }\n  ],\n  \"reason\": \"All must-have requirements are explicitly supported by evidence.\",\n  \"reasoning\": \"Concise evidence-based explanation.\",\n  \"confidence\": 0.9,\n  \"suspicious_instruction_detected\": false\n}"
       },
       "id": "9204dd16-dadf-41b0-9360-f3ea70ba981a",
       "name": "Structured Output",
