@@ -1,0 +1,23 @@
+{
+  "source": "linkedin_jobs",
+  "linkedin_application_id": "LI-DEMO-0001",
+  "candidate_id": "CAND-DEMO-0001",
+  "candidate_name": "Sample Candidate",
+  "email": "candidate@example.invalid",
+  "phone": "+1 555 010 0001",
+  "job_id": "JOB-DEMO-001",
+  "resume_text": "Integration engineer with hands-on workflow automation, SQL, ETL, REST API, OAuth, and cloud integration experience.",
+  "screening_answers": [
+    {
+      "question": "Describe your experience with enterprise integration workflows.",
+      "answer": "I built, monitored, and troubleshot production integrations across cloud services."
+    }
+  ],
+  "recruiter_notes": "",
+  "conversation_notes": "",
+  "environment": "staging",
+  "deployment_phase": 0,
+  "prompt_version": "screening-v1.0",
+  "rubric_version": "scorecard-v1.0"
+}
+
