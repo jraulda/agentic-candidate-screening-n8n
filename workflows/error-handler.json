@@ -1,0 +1,177 @@
+{
+  "name": "Recruiting - Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -48
+      ],
+      "id": "48a99b32-aad0-45c8-80bf-d61352457343",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_DATA_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Configure this Data Table"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "execution_id",
+              "keyValue": "={{ String($json.execution.id) }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        192,
+        -48
+      ],
+      "id": "03255005-cf97-4e47-80b5-563b67a696e9",
+      "name": "Find Application by Execution ID",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_DATA_TABLE_ID",
+          "mode": "list",
+          "cachedResultName": "Configure this Data Table"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "FAILED"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "idempotency_key",
+              "displayName": "idempotency_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "trace_id",
+              "displayName": "trace_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "execution_id",
+              "displayName": "execution_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        400,
+        -48
+      ],
+      "id": "cb28e927-66e9-4551-a140-41896611b6b8",
+      "name": "Mark Application as Failed"
+    },
+    {
+      "parameters": {
+        "chatId": "REPLACE_WITH_TELEGRAM_CHAT_ID",
+        "text": "={{ `🚨 WORKFLOW ERROR ALERT\n\nTrace ID: ${$json.trace_id || 'unavailable'}\nExecution ID: ${$json.execution_id || 'unavailable'}\nApplication: ${$json.idempotency_key || 'unavailable'}\nStatus: FAILED\nWorkflow: ${$('Error Trigger').first().json.workflow?.name || 'unknown'}\nFailed node: ${$('Error Trigger').first().json.execution?.lastNodeExecuted || 'unknown'}\nError: ${$('Error Trigger').first().json.execution?.error?.message || 'no details'}\n\nThe application was marked as FAILED and will not continue until a controlled retry is submitted.` }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        608,
+        -48
+      ],
+      "id": "2030f851-0b9b-459b-aaf1-fcf16b632afd",
+      "name": "Alert Review Team"
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Find Application by Execution ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Application by Execution ID": {
+      "main": [
+        [
+          {
+            "node": "Mark Application as Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Application as Failed": {
+      "main": [
+        [
+          {
+            "node": "Alert Review Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}
