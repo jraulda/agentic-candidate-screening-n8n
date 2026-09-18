@@ -1,0 +1,17 @@
+{
+  "source": "linkedin_jobs",
+  "linkedin_application_id": "LI-DEMO-0002",
+  "candidate_id": "CAND-DEMO-0002",
+  "candidate_name": "Example Applicant",
+  "email": "applicant@example.invalid",
+  "job_id": "JOB-DEMO-001",
+  "resume_text": "Data integration specialist with API and SQL experience.",
+  "screening_answers": [],
+  "recruiter_notes": "Candidate supplied additional technical detail after applying.",
+  "conversation_notes": "Candidate stated that their most recent project included monitored production workflows and token-based API authentication.",
+  "environment": "staging",
+  "deployment_phase": 0,
+  "prompt_version": "screening-v1.0",
+  "rubric_version": "scorecard-v1.0"
+}
+
